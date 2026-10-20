@@ -1,0 +1,53 @@
+x-api: &api
+  build: ./server
+  env_file: .env
+  environment:
+    MONGO_URI: mongodb://${MONGO_USER:?set in .env}:${MONGO_PASSWORD:?set in .env}@mongo:27017/portfolio?authSource=admin
+    REDIS_URL: redis://:${REDIS_PASSWORD:?set in .env}@redis:6379
+  depends_on:
+    mongo: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
+  restart: unless-stopped
+
+services:
+  nginx: # load balancer + the website; the only port exposed to your machine
+    build: { context: ., dockerfile: nginx/Dockerfile }
+    ports: ["8080:80"]
+    depends_on:
+      api1: { condition: service_healthy }
+      api2: { condition: service_healthy }
+      api3: { condition: service_healthy }
+    restart: unless-stopped
+  api1: { <<: *api, hostname: api1 }
+  api2: { <<: *api, hostname: api2 }
+  api3: { <<: *api, hostname: api3 }
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+volumes:
+  mongo_data:
